@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Slope Field Visualizer</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; }
+    #controls { margin: 1rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+    label { display: flex; flex-direction: column; font-size: 0.9rem; }
+    canvas { border: 1px solid #aaa; cursor: crosshair; }
+    .small { font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <h2>dy/dx = f(x, y) Slope Field</h2>
+  <div id="controls">
+    <label>f(x, y)<input id="fn-input" value="x - y" /></label>
+    <label>Point (a, b)<input id="point-input" value="0, 1" /></label>
+    <fieldset style="border:1px solid #ccc; padding:0.5rem; border-radius:8px;">
+      <legend>Numerical Method</legend>
+      <label class="small"><input type="radio" name="method" value="euler" checked /> Euler</label>
+      <label class="small"><input type="radio" name="method" value="rk4" /> RK4</label>
+    </fieldset>
+    <button id="plot-btn">Plot</button>
+    <button id="clear-curves-btn">Clear curves</button>
+  </div>
+  <canvas id="canvas" width="700" height="600"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // Coordinate window
+    let xMin = -5, xMax = 5, yMin = -5, yMax = 5;
+
+    // Stored curves so we can redraw them after zoom/pan/field redraw
+    const curves = [];
+
+    function mapX(x) {
+      return ((x - xMin) / (xMax - xMin)) * canvas.width;
+    }
+    function mapY(y) {
+      return canvas.height - ((y - yMin) / (yMax - yMin)) * canvas.height;
+    }
+    function invMapX(px) {
+      return xMin + (px / canvas.width) * (xMax - xMin);
+    }
+    function invMapY(py) {
+      return yMin + ((canvas.height - py) / canvas.height) * (yMax - yMin);
+    }
+
+    function buildFunction(fStr) {
+      let processed = fStr.replace(/\^/g, '**');
+
+      // Replace common functions with Math equivalents
+      processed = processed.replace(/\b(sin|cos|tan|exp|ln)\b/g, (m) => {
+      if (m === 'ln') return 'Math.log';
+      if (m === 'exp') return 'Math.exp';
+      return `Math.${m}`;
+     });
+
+  return new Function('x', 'y', `return ${processed};`);
+}
+
+    function drawSlopeField() {
+      const fStr = document.getElementById('fn-input').value;
+      let f;
+      try {
+        f = buildFunction(fStr);
+      } catch (err) {
+        alert('Invalid function.');
+        return;
+      }
+
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      // Axes
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, mapY(0)); ctx.lineTo(canvas.width, mapY(0)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(mapX(0), 0); ctx.lineTo(mapX(0), canvas.height); ctx.stroke();
+
+      // slope segments
+      const cols = 30, rows = 26;
+      const dx = (xMax - xMin) / cols;
+      const dy = (yMax - yMin) / rows;
+
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+      for (let i = 0; i <= cols; i++) {
+        for (let j = 0; j <= rows; j++) {
+          const x = xMin + i * dx;
+          const y = yMin + j * dy;
+          let slope;
+          try { slope = f(x, y); if (!isFinite(slope)) slope = 0; } catch (err) { slope = 0; }
+
+          const px = mapX(x);
+          const py = mapY(y);
+          const len = Math.min(canvas.width, canvas.height) * 0.02;
+          const angle = Math.atan(slope);
+
+          ctx.beginPath();
+          ctx.moveTo(px - len * Math.cos(angle) / 2, py + len * Math.sin(angle) / 2);
+          ctx.lineTo(px + len * Math.cos(angle) / 2, py - len * Math.sin(angle) / 2);
+          ctx.stroke();
+        }
+      }
+    }
+
+    function drawAll() {
+      drawSlopeField();
+      // draw stored curves
+      for (const c of curves) {
+        ctx.beginPath();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = c.color;
+        let first = true;
+        for (const p of c.points) {
+          const px = mapX(p[0]);
+          const py = mapY(p[1]);
+          if (first) { ctx.moveTo(px, py); first = false; } else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    }
+
+    function randColor() {
+      const h = Math.floor(Math.random()*360);
+      return `hsl(${h} 70% 50%)`;
+    }
+
+    // generate curve both backward and forward from (a,b)
+    function generateCurve(a, b, method) {
+      const fStr = document.getElementById('fn-input').value;
+      let f;
+      try { f = buildFunction(fStr); } catch (err) { alert('Invalid function'); return null; }
+
+      const h = 0.02;
+      const steps = 2000; // total points in each direction
+
+      const ptsForward = [];
+      let x = a, y = b;
+      ptsForward.push([x,y]);
+      for (let k=0;k<steps;k++) {
+        if (method === 'euler') {
+          y += f(x,y)*h; x += h;
+        } else {
+          const k1 = f(x,y);
+          const k2 = f(x + h/2, y + h*k1/2);
+          const k3 = f(x + h/2, y + h*k2/2);
+          const k4 = f(x + h, y + h*k3);
+          y += (h/6)*(k1+2*k2+2*k3+k4);
+          x += h;
+        }
+        if (!isFinite(x) || !isFinite(y)) break;
+        ptsForward.push([x,y]);
+        // stop if goes way outside
+        if (x < xMin- (xMax-xMin)*5 || x > xMax + (xMax-xMin)*5 || y < yMin - (yMax-yMin)*5 || y > yMax + (yMax-yMin)*5) break;
+      }
+
+      const ptsBackward = [];
+      x = a; y = b;
+      for (let k=0;k<steps;k++) {
+        if (method === 'euler') {
+          y -= f(x,y)*h; x -= h;
+        } else {
+          const k1 = f(x,y);
+          const k2 = f(x - h/2, y - h*k1/2);
+          const k3 = f(x - h/2, y - h*k2/2);
+          const k4 = f(x - h, y - h*k3);
+          y -= (h/6)*(k1+2*k2+2*k3+k4);
+          x -= h;
+        }
+        if (!isFinite(x) || !isFinite(y)) break;
+        ptsBackward.push([x,y]);
+        if (x < xMin- (xMax-xMin)*5 || x > xMax + (xMax-xMin)*5 || y < yMin - (yMax-yMin)*5 || y > yMax + (yMax-yMin)*5) break;
+      }
+
+      // combine: backward reversed, then forward
+      ptsBackward.reverse();
+      return ptsBackward.concat(ptsForward);
+    }
+
+    // Plot a single curve and store it
+    function plotSolutionMultiple() {
+      const pointStr = document.getElementById('point-input').value;
+      const parts = pointStr.split(',').map(s=>s.trim());
+      if (parts.length<2) { alert('Enter point as a,b'); return; }
+      const a = Number(parts[0]);
+      const b = Number(parts[1]);
+      if (!isFinite(a) || !isFinite(b)) { alert('Invalid point'); return; }
+      const method = document.querySelector('input[name="method"]:checked').value;
+
+      const pts = generateCurve(a,b,method);
+      if (!pts || pts.length===0) return;
+      const color = randColor();
+      curves.push({points: pts, color});
+      drawAll();
+    }
+
+    document.getElementById('plot-btn').addEventListener('click', plotSolutionMultiple);
+
+    document.getElementById('clear-curves-btn').addEventListener('click', () => { curves.length = 0; drawAll(); });
+
+    // --- Zoom & Pan ---
+    let isDragging = false, lastX = 0, lastY = 0;
+
+    canvas.addEventListener('mousedown', (e) => {
+      isDragging = true; lastX = e.clientX; lastY = e.clientY;
+    });
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = (e.clientX - lastX) * (xMax - xMin) / canvas.width;
+      const dy = (e.clientY - lastY) * (yMax - yMin) / canvas.height;
+      xMin -= dx; xMax -= dx; yMin += dy; yMax += dy;
+      lastX = e.clientX; lastY = e.clientY;
+      drawAll();
+    });
+    canvas.addEventListener('mouseup', () => { isDragging = false; });
+    canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = 1.12;
+      const rect = canvas.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
+      const mx = invMapX(offsetX);
+      const my = invMapY(offsetY);
+      if (e.deltaY < 0) { // zoom in
+        xMin = mx + (xMin - mx) / zoomFactor; xMax = mx + (xMax - mx) / zoomFactor;
+        yMin = my + (yMin - my) / zoomFactor; yMax = my + (yMax - my) / zoomFactor;
+      } else {
+        xMin = mx + (xMin - mx) * zoomFactor; xMax = mx + (xMax - mx) * zoomFactor;
+        yMin = my + (yMin - my) * zoomFactor; yMax = my + (yMax - my) * zoomFactor;
+      }
+      drawAll();
+    });
+
+    // click-to-set-point: left-click
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const px = e.clientX - rect.left; const py = e.clientY - rect.top;
+      const x = invMapX(px); const y = invMapY(py);
+      document.getElementById('point-input').value = `${x.toFixed(3)}, ${y.toFixed(3)}`;
+    });
+
+    // initial draw
+    drawAll();
+  </script>
+</body>
+</html>
